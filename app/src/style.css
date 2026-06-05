@@ -1,0 +1,22 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+.stage {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0b0f17;
+  color: #e6edf3;
+  font-family: sans-serif;
+  /* No text selection on a static page (but keep the cursor visible). */
+  user-select: none;
+}
+
+.stage h1 {
+  font-size: 4rem;
+  font-weight: 600;
+}

@@ -1,0 +1,7 @@
+/node_modules/
+/out/
+
+# Yarn Berry (node-modules linker; yarn binary comes from corepack, not committed)
+/.yarn/*
+!/.yarn/patches
+.pnp.*

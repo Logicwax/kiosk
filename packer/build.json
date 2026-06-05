@@ -1,0 +1,108 @@
+{
+  "variables": {
+    "accelerator": "kvm",
+    "cpus": "4",
+    "disk_size": "8000",
+    "extra_arguments": "{{ env `ANSIBLE_ARGS` }}",
+    "headless": "true",
+    "iso_checksum": "{{user `iso_checksum`}}",
+    "iso_checksum_type": "sha256",
+    "iso_url": "{{user `iso_url`}}",
+    "memory": "4G",
+    "version": "{{ env `VERSION`}}"
+  },
+  "builders": [
+    {
+      "accelerator": "{{ user `accelerator` }}",
+      "boot_command": [
+        "<wait><e><F2>",
+        "linux /install.amd/vmlinuz ",
+        "hostname=airgap ",
+        "auto=true ",
+        "priority=critical ",
+        "interface=auto ",
+        "url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/packer/preseed.cfg ",
+        "--- ",
+        "quiet",
+        "<enter>",
+        "initrd /install.amd/initrd.gz<enter>",
+        "boot",
+        "<enter>"
+      ],
+      "boot_wait": "10s",
+      "disk_interface": "virtio-scsi",
+      "disk_size": "{{ user `disk_size` }}",
+      "format": "raw",
+      "headless": "{{ user `headless` }}",
+      "http_directory": ".",
+      "iso_checksum": "sha256:{{ user `iso_checksum` }}",
+      "iso_url": "{{ user `iso_url` }}",
+      "name": "qemu",
+      "output_directory": ".packer/build/",
+      "qemuargs": [
+        [
+          "-m",
+          "{{ user `memory` }}"
+        ],
+        [
+          "-smp",
+          "cpus={{ user `cpus`}}"
+        ],
+        [
+          "-bios",
+          "/usr/share/qemu/OVMF.fd"
+        ],
+        [
+          "-enable-kvm"
+        ]
+      ],
+      "shutdown_command": "shutdown -h now",
+      "ssh_password": "shell",
+      "ssh_timeout": "60m",
+      "ssh_username": "root",
+      "type": "qemu"
+    }
+  ],
+  "provisioners": [
+    {
+      "inline": [
+        "apt install -y python3",
+        "mkdir -p /tmp/kiosk-app/src"
+      ],
+      "type": "shell"
+    },
+    {
+      "destination": "/tmp/kiosk-app/package.json",
+      "source": "app/package.json",
+      "type": "file"
+    },
+    {
+      "destination": "/tmp/kiosk-app/.yarnrc.yml",
+      "source": "app/.yarnrc.yml",
+      "type": "file"
+    },
+    {
+      "destination": "/tmp/kiosk-app/yarn.lock",
+      "source": "app/yarn.lock",
+      "type": "file"
+    },
+    {
+      "destination": "/tmp/kiosk-app/main.js",
+      "source": "app/main.js",
+      "type": "file"
+    },
+    {
+      "destination": "/tmp/kiosk-app/src/",
+      "source": "app/src/",
+      "type": "file"
+    },
+    {
+      "extra_arguments": [
+        "--scp-extra-args",
+        "'-O'"
+      ],
+      "playbook_file": "ansible/main.yml",
+      "type": "ansible"
+    }
+  ]
+}
