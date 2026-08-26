@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Install the version/hash-locked Debian packages, run during `docker build`.
+#
+# Overwrites the base image's debian.sources with the locked deb822 file (live +
+# snapshot failover), downloads exactly the versions in
+# build-toolchain-version-lock.list from the snapshot, verifies every .deb against
+# build-toolchain-hash-lock.txt (fails on any mismatch), then installs.
+set -e
+
+# The locked debian.sources references the NodeSource key, so put it in place
+# before apt reads that file. Keeping the anchor in the repo (rather than curl'ing
+# it at build time) is what lets nodejs be hash-locked like every other package.
+# apt accepts ASCII-armored keys via a .asc path, so no gnupg is required here.
+cp /config/pgp/nodesource.asc /usr/share/keyrings/nodesource.asc
+
+# The locked sources include an HTTPS NodeSource entry and the base image ships no
+# CA bundle, so bootstrap ca-certificates from the plain-http Debian mirror first.
+# Otherwise apt cannot verify deb.nodesource.com and silently ignores that source
+# — here that surfaces as "version not found" for the locked nodejs, but only
+# because the version lock names a NodeSource build. Do not rely on that alone.
+# Use the base image's own (plain http) sources for this one step — do NOT add a
+# stanza for the same suite, as apt rejects conflicting Check-Valid-Until values
+# for a source it already knows about.
+apt-get update
+apt-get install -y --no-install-recommends ca-certificates
+
+cp /config/lock/debian.sources /etc/apt/sources.list.d/debian.sources
+apt-get update
+
+# Download the exact locked versions (retry through snapshot.d.o throttling).
+until apt-get install --download-only --allow-downgrades -y \
+		$(cat /config/lock/build-toolchain-version-lock.list); do
+	echo "apt download failed (snapshot throttling?); retrying in 60s..."
+	sleep 60
+done
+
+# Verify every downloaded .deb against the hash-lock before installing anything.
+( cd /var/cache/apt/archives \
+	&& find . -type f -iname '*.deb' -exec sha256sum {} \; \
+	| sed 's|\./||g' | LC_ALL=C sort \
+) > /tmp/toolchain-hash-compare.txt
+if ! diff -q /config/lock/build-toolchain-hash-lock.txt /tmp/toolchain-hash-compare.txt >/dev/null; then
+	echo "Package hash mismatch — possible supply-chain tampering!"
+	diff /config/lock/build-toolchain-hash-lock.txt /tmp/toolchain-hash-compare.txt || true
+	exit 1
+fi
+
+apt-get install --allow-downgrades -y $(sed 's/#.*//' /config/build-toolchain-pkgs.list)
+rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* /tmp/*

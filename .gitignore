@@ -1,3 +1,6 @@
-/build/
-/.packer/
-ansible/main.retry
+.packer/
+build/
+os-builder/secureboot/
+app/node_modules/
+app/out/
+app/.yarn/

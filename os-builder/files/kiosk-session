@@ -1,0 +1,73 @@
+#!/bin/bash
+# Autologin X session launcher, run from ~/.bash_profile.
+#
+# This never returns to a prompt: it either runs the X session until it ends, or
+# explains why it could not and logs out. That is deliberate — NAutoVTs=0 disables
+# the other VTs precisely so the console offers no shell, and this must not become
+# the hole in that.
+trap '' INT QUIT TSTP
+
+APP_LOG=/tmp/kiosk.log
+X_LOG=/tmp/xstart.log
+
+# A crashed X can leave its socket behind. Left in place it looks like "X is already
+# running" to the next autologin, which would skip the session and drop to a prompt.
+rm -f /tmp/.X11-unix/X0 2>/dev/null
+
+# ---------------------------------------------------------------------------
+# Wait for a display X can actually use.
+#
+# Two things have to be true, and waiting for only one of them is what made this
+# flaky. On a hybrid-GPU laptop the GPUs probe asynchronously, and the first DRM
+# card to appear may be the discrete one with nothing plugged into it (measured on
+# such a machine: card0 = nvidia, 0 connected connectors; card1 = i915, 2). X picks
+# a device, finds no usable output on it, and exits with "no screens found".
+#
+#   1. every GPU has enumerated  — approximated by the card count holding steady,
+#      so we do not race ahead and let X bind the wrong one
+#   2. some connector is connected AND has modes — status alone flips to
+#      "connected" before the EDID is read, so the modes list is the real signal
+#
+# NB: [ -s file ] is useless on sysfs — st_size is reported as 4096 even when the
+# attribute is empty — so the content has to be read.
+# ---------------------------------------------------------------------------
+_card_count() { ls -d /sys/class/drm/card[0-9] 2>/dev/null | wc -l; }
+
+_usable_output() {
+	local c
+	for c in /sys/class/drm/card*-*/; do
+		[ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
+		[ -n "$(cat "$c/modes" 2>/dev/null)" ] && return 0
+	done
+	return 1
+}
+
+_prev=-1
+_stable=0
+for _i in $(seq 1 150); do          # 150 * 0.2s = 30s ceiling
+	_n=$(_card_count)
+	if [ "$_n" = "$_prev" ]; then _stable=$((_stable + 1)); else _stable=0; _prev=$_n; fi
+	# count steady for ~1s AND a real display present
+	[ "$_stable" -ge 5 ] && _usable_output && break
+	sleep 0.2
+done
+
+# Retry anyway: the checks above are a good predictor, not a guarantee, and a lost
+# race should cost a couple of seconds rather than the whole boot. Output goes to a
+# log, not the screen — a failed probe while the GPU settles is expected and
+# printing it just spams the display.
+for _a in 1 2 3 4 5; do
+	startx >>"$X_LOG" 2>&1 && exit 0
+	sleep 2
+done
+
+echo
+echo "=== X failed after 5 attempts ==="
+tail -n 30 "$X_LOG" 2>/dev/null
+echo "=== app log ==="
+tail -n 20 "$APP_LOG" 2>/dev/null
+echo "=== Xorg log ==="
+tail -n 20 ~/.local/share/xorg/Xorg.0.log /var/log/Xorg.0.log 2>/dev/null
+echo "=== end (no shell; logging out) ==="
+sleep 60
+exit 0
