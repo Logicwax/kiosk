@@ -1,0 +1,327 @@
+---
+name: Build Disk Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'os-builder/**'
+      - 'deb-builder/**'
+      - 'app/**'
+      - 'scripts/**'
+      - 'Makefile'
+      - '.github/workflows/build-disk-image.yml'
+
+permissions:
+  contents: write   # needed to create tags and upload release assets
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Two independent builds run in parallel on separate runners.  Both must
+  # produce the exact same manifest before PGP signatures are checked.
+  # ---------------------------------------------------------------------------
+  build-1:
+    name: "Build 1 of 2"
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable containerd-snapshotter
+        run: |
+          echo '{"features":{"containerd-snapshotter":true}}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - name: Set up Docker Buildx (docker-container driver, pinned BuildKit)
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+          driver-opts: image=moby/buildkit:v0.26.2
+          buildkitd-flags: --allow-insecure-entitlement=network.host
+
+      - name: Verify buildx driver
+        run: |
+          DRIVER=$(docker buildx inspect | grep '^Driver:' | awk '{print $2}')
+          BUILDKIT=$(docker buildx inspect | grep 'BuildKit version' | awk '{print $3}')
+          echo "Driver: $DRIVER  BuildKit: $BUILDKIT"
+          [ "$DRIVER" = "docker-container" ] || { echo "ERROR: wrong driver: $DRIVER"; exit 1; }
+
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Build disk image
+        run: make build
+        env:
+          SOURCE_DATE_EPOCH: 0
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-build-1
+          path: attestation/manifest.txt
+          retention-days: 1
+
+      - name: Get version
+        id: version
+        run: echo "version=$(node -p "require('./app/package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Upload disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiosk-v${{ steps.version.outputs.version }}.img.gz
+          path: build/kiosk-v${{ steps.version.outputs.version }}.img.gz
+          retention-days: 30
+          compression-level: 0  # already compressed
+
+  build-2:
+    name: "Build 2 of 2"
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable containerd-snapshotter
+        run: |
+          echo '{"features":{"containerd-snapshotter":true}}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
+      - name: Set up Docker Buildx (docker-container driver, pinned BuildKit)
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+          driver-opts: image=moby/buildkit:v0.26.2
+          buildkitd-flags: --allow-insecure-entitlement=network.host
+
+      - name: Verify buildx driver
+        run: |
+          DRIVER=$(docker buildx inspect | grep '^Driver:' | awk '{print $2}')
+          BUILDKIT=$(docker buildx inspect | grep 'BuildKit version' | awk '{print $3}')
+          echo "Driver: $DRIVER  BuildKit: $BUILDKIT"
+          [ "$DRIVER" = "docker-container" ] || { echo "ERROR: wrong driver: $DRIVER"; exit 1; }
+
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Build disk image
+        run: make build
+        env:
+          SOURCE_DATE_EPOCH: 0
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-build-2
+          path: attestation/manifest.txt
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Verify: only runs after both builds complete.
+  #   1. Both manifests must be identical (reproducibility).
+  #   2. Both must match the committed manifest.
+  #   3. PGP signatures are checked (informational on PRs, required on tags).
+  #   4. On a tag push: upload the .img.gz to the GitHub release.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: "Verify reproducibility and attestations"
+    needs: [build-1, build-2]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y gnupg jq
+
+      - name: Download manifest from build 1
+        uses: actions/download-artifact@v4
+        with:
+          name: manifest-build-1
+          path: /tmp/manifests/build-1
+
+      - name: Download manifest from build 2
+        uses: actions/download-artifact@v4
+        with:
+          name: manifest-build-2
+          path: /tmp/manifests/build-2
+
+      - name: Compare manifests between the two builds
+        id: repro
+        run: |
+          m1=/tmp/manifests/build-1/manifest.txt
+          m2=/tmp/manifests/build-2/manifest.txt
+
+          {
+            echo "## Reproducibility"
+            echo
+            echo "### Build 1"
+            echo '```'
+            cat "$m1"
+            echo '```'
+            echo "### Build 2"
+            echo '```'
+            cat "$m2"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if diff -u "$m1" "$m2" > /tmp/manifests/build-diff; then
+            echo "PASS: both independent builds produced identical manifests." \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "reproduced=true" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "**FAIL: the two builds produced different manifests — build is NOT reproducible.**"
+              echo
+              echo '```diff'
+              cat /tmp/manifests/build-diff
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "reproduced=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Compare against committed manifest
+        run: |
+          m1=/tmp/manifests/build-1/manifest.txt
+
+          if [ ! -f attestation/manifest.txt ]; then
+            echo "No committed manifest yet — skipping comparison." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if diff -u attestation/manifest.txt "$m1" > /tmp/manifests/committed-diff; then
+            echo "PASS: both builds match the committed manifest." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "**FAIL: builds do NOT match the committed manifest.**"
+              echo "The committed signatures describe bytes that CI cannot reproduce."
+              echo
+              echo '```diff'
+              cat /tmp/manifests/committed-diff
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Verify PGP signatures
+        id: verify
+        run: |
+          GNUPGHOME=$(mktemp -d)
+          chmod 700 "$GNUPGHOME"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+
+          known=0
+          for k in attestation/signers/*.asc; do
+            GNUPGHOME="$GNUPGHOME" gpg --quiet --batch --import "$k" 2>/dev/null \
+              && known=$((known + 1)) || true
+          done
+
+          total=0; valid=0; invalid=0
+          declare -A counted=()
+          rows=""
+          shopt -s nullglob
+          for sig in attestation/signatures/*.asc; do
+            total=$((total + 1))
+            signame=$(basename "$sig")
+            status=$(GNUPGHOME="$GNUPGHOME" gpg --batch --status-fd 1 \
+              --verify "$sig" attestation/manifest.txt 2>/dev/null || true)
+
+            if good=$(echo "$status" | grep -m1 '^\[GNUPG:\] GOODSIG '); then
+              keyid=$(awk '{print $3}' <<< "$good")
+              uid=$(cut -d' ' -f4- <<< "$good")
+              if [ -n "${counted[$keyid]:-}" ]; then
+                rows+="| ⚠️ Duplicate | \`$signame\` | \`$keyid\` | $uid |\n"
+              else
+                counted[$keyid]=1
+                valid=$((valid + 1))
+                rows+="| ✅ Valid | \`$signame\` | \`$keyid\` | $uid |\n"
+              fi
+            elif echo "$status" | grep -q '^\[GNUPG:\] NO_PUBKEY'; then
+              kid=$(echo "$status" | awk '/NO_PUBKEY/{print $3}')
+              rows+="| ❌ Not a signer | \`$signame\` | \`$kid\` | key not in \`attestation/signers/\` |\n"
+              invalid=$((invalid + 1))
+            else
+              rows+="| ❌ Invalid | \`$signame\` | — | signature does not verify |\n"
+              invalid=$((invalid + 1))
+            fi
+          done
+          shopt -u nullglob
+
+          if   [ $invalid -gt 0 ]; then result=INVALID
+          elif [ $total   -eq 0 ]; then result=NO_SIGNATURES
+          elif [ $valid   -lt 1  ]; then result=UNSIGNED
+          else                          result=PASSED
+          fi
+
+          manifest_hash=$(sha256sum attestation/manifest.txt | awk '{print $1}')
+
+          {
+            echo "## Attestation"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Manifest SHA256** | \`$manifest_hash\` |"
+            echo "| **Authorised signers** | $known key(s) in \`attestation/signers/\` |"
+            echo ""
+            if [ $total -eq 0 ]; then
+              echo "> ⚠️ No signatures present in \`attestation/signatures/\`."
+            else
+              echo "| Status | File | Key ID | Identity |"
+              echo "|--------|------|--------|----------|"
+              printf '%b' "$rows"
+            fi
+            echo ""
+            case "$result" in
+              PASSED)      echo "✅ **PASSED** — $valid valid signature(s) verified." ;;
+              UNSIGNED)    echo "⚠️ **Unsigned** — no valid signatures found." ;;
+              INVALID)     echo "❌ **FAILED** — $invalid signature(s) are invalid or from unauthorised keys." ;;
+              NO_SIGNATURES) echo "⚠️ **No signatures** — run \`make sign\` after building and commit the result." ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "valid=$valid"   >> "$GITHUB_OUTPUT"
+
+          [ $invalid -eq 0 ] || exit 1
+
+      - name: Require valid signature on a release tag
+        if: github.ref == 'refs/heads/master' && steps.verify.outputs.result == 'INVALID'
+        run: |
+          echo "::error::Invalid or unauthorised PGP signature(s) found — fix before merging."
+          exit 1
+
+      - name: Tag and publish release
+        if: github.ref == 'refs/heads/master' && steps.verify.outputs.result == 'PASSED'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(node -p "require('./app/package.json').version")"
+          TAG="v${VERSION}"
+          ASSET_NAME="kiosk-v${VERSION}.img.gz"
+
+          # Download the image built by build-1.
+          gh run download "${{ github.run_id }}" --name "$ASSET_NAME" --dir /tmp/release
+
+          # Delete existing release and tag if present, then recreate from scratch.
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+
+          # Create and push the tag from the current commit.
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes
+          gh release upload "$TAG" "/tmp/release/$ASSET_NAME" --clobber
+          echo "Tagged $TAG and published release with $ASSET_NAME" >> "$GITHUB_STEP_SUMMARY"

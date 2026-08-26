@@ -1,0 +1,44 @@
+# Packages installed INTO the kiosk image by mmdebstrap (--include).
+# Derived from os-builder/configure-rootfs.sh, plus what a bootable live
+# system needs. Ansible (run via the chroot connection) now only does
+# configuration — package installs happen here so they come from the pinned
+# live+snapshot sources as part of the deterministic bootstrap.
+#
+# Bare package names, one per line. `#` starts a comment anywhere on a line.
+# After editing, run `make rootfs-update` to regenerate the version + hash locks
+# — the build installs from the LOCK, not from this file, so a package added
+# here without relocking silently never appears in the image.
+
+# --- base / boot ---
+
+linux-image-amd64
+dracut               # initramfs with the rootovl overlay (initramfs-tools lacks systemd)
+systemd
+systemd-sysv
+udev
+ca-certificates
+debian-archive-keyring
+gnupg
+parted
+
+# --- X / GUI stack (electron app) ---
+# xserver-xorg + xinit pull a slim X server (no xterm/twm/extra fonts); the rest
+# are Electron/Chromium's GTK runtime libraries.
+
+xserver-xorg
+xserver-xorg-video-all
+xinit
+x11-xserver-utils
+libgtk-3-0
+libnss3
+libnotify4
+libasound2
+libxtst6
+libxss1
+libglib2.0-bin
+xdg-utils
+zlib1g
+
+# --- firmware (modern hardware / laptops) ---
+
+firmware-linux-free

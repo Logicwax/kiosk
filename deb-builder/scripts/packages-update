@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Regenerate the Debian apt lock files (run via `make builder-update`).
+#
+# Scoped to the Debian packages this builder adds on top of the digest-pinned base
+# image. Writes a deb822 debian.sources listing the live mirror first and a frozen
+# snapshot.debian.org timestamp second (failover URIs): apt prefers live for
+# downloads and falls back to the snapshot for anything live has pruned, with
+# signatures verified.
+#
+# NodeSource is listed as a THIRD source so nodejs is version- and hash-locked
+# exactly like every other package, rather than being apt-installed unverified in
+# the Dockerfile. Caveat: NodeSource has no snapshot.debian.org equivalent, so it
+# gets no failover URI — the hash lock gives integrity, not availability. If
+# NodeSource prunes the locked version the build fails loudly at download.
+[ -f /.dockerenv ] || { echo "Run inside the builder container"; exit 1; }
+set -e
+
+snapshot_url="http://snapshot.debian.org/archive/debian"
+# .nvmrc is the SINGLE source of truth for Node: the Makefile reads it and passes
+# the version in, and both the NodeSource suite (node_<major>.x) and the exact
+# package version are derived from it below. Nothing here needs hand-editing when
+# Node moves — change .nvmrc and re-run `make builder-update`.
+: "${NODE_VERSION:?NODE_VERSION not set — run via 'make builder-update', which reads .nvmrc}"
+node_major="${NODE_VERSION%%.*}"
+# Pinned NodeSource signing key, committed at deb-builder/pgp/nodesource.asc so
+# the trust anchor is reviewable instead of being curl'd fresh on every build.
+# apt reads ASCII-armored keys directly when the file ends in .asc, so this is a
+# plain copy — no gnupg needed in the (deliberately minimal) base image.
+cp /config/pgp/nodesource.asc /usr/share/keyrings/nodesource.asc
+
+# The NodeSource source below is HTTPS and the base image ships no CA bundle, so
+# fetch ca-certificates FIRST using only the (plain http) Debian mirror. Without
+# this apt cannot verify deb.nodesource.com, silently *ignores* that source, and
+# resolves `nodejs` from Debian instead — locking the wrong major version while
+# still looking like a clean run.
+apt-get update
+apt-get install -y --no-install-recommends ca-certificates
+snapshot_date="$(date +%Y%m%dT000000Z)"
+distro="$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2)"
+
+cat > /etc/apt/sources.list.d/debian.sources <<-EOF
+	Types: deb
+	URIs: http://deb.debian.org/debian ${snapshot_url}/${snapshot_date}
+	Suites: ${distro} ${distro}-updates
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+	Check-Valid-Until: no
+
+	Types: deb
+	URIs: http://deb.debian.org/debian-security ${snapshot_url}-security/${snapshot_date}
+	Suites: ${distro}-security
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+	Check-Valid-Until: no
+
+	Types: deb
+	URIs: https://deb.nodesource.com/node_${node_major}.x/
+	Suites: nodistro
+	Components: main
+	Signed-By: /usr/share/keyrings/nodesource.asc
+EOF
+cp /etc/apt/sources.list.d/debian.sources /config/lock/debian.sources
+
+apt-get update
+
+# Resolve the exact NodeSource build for the .nvmrc version. The packaging suffix
+# (e.g. -1nodesource1) is NodeSource's own revision, so it is looked up rather
+# than assumed. Pinning the exact version is load-bearing: NodeSource has no
+# snapshot mirror, so its "candidate" is whatever they currently serve — a bare
+# `nodejs` would install the newest 24.x at image-build time and quietly ignore
+# this lock.
+node_pkg_ver="$(apt-cache madison nodejs 2>/dev/null \
+	| awk -v v="$NODE_VERSION" '$3 ~ "^"v"-" {print $3; exit}')"
+if [ -z "$node_pkg_ver" ]; then
+	echo "ERROR: NodeSource has no nodejs $NODE_VERSION in node_${node_major}.x."
+	echo "       Available: $(apt-cache madison nodejs | awk '{print $3}' | head -5 | tr '\n' ' ')"
+	exit 1
+fi
+echo "nodejs $NODE_VERSION -> $node_pkg_ver (from .nvmrc)"
+# Keep the pkgs list in step, so packages-install (which installs by name from it)
+# gets the same exact version at image-build time.
+sed -i "s|^nodejs=.*|nodejs=${node_pkg_ver}|" /config/build-toolchain-pkgs.list
+# Fail closed: if that line is not of the form `nodejs=<version>` the sed matches
+# nothing and says so in no way at all — the lock would then resolve whatever
+# NodeSource currently serves, silently ignoring .nvmrc.
+grep -qx "nodejs=${node_pkg_ver}" /config/build-toolchain-pkgs.list || {
+	echo "ERROR: build-toolchain-pkgs.list has no 'nodejs=<version>' line to pin."
+	echo "       Expected to write nodejs=${node_pkg_ver}; the list must contain a"
+	echo "       bare 'nodejs=...' line (no trailing comment) for this to work."
+	exit 1
+}
+
+# Download (only) the packages we add plus any not-yet-present dependencies.
+apt-get install -y --download-only $(sed 's/#.*//' /config/build-toolchain-pkgs.list)
+
+# Fail closed: apt treats an unreachable source as a warning and falls back to
+# another one, so verify the resolved nodejs really is the NodeSource build. A
+# silently Debian-resolved nodejs would pin the wrong major and only surface much
+# later as broken native modules.
+node_ver="$(dpkg-deb -f /var/cache/apt/archives/nodejs_*.deb Version 2>/dev/null || true)"
+case "$node_ver" in
+	*nodesource*) echo "nodejs resolved from NodeSource: $node_ver" ;;
+	"")  echo "ERROR: no nodejs .deb was downloaded"; exit 1 ;;
+	*)   echo "ERROR: nodejs resolved to '$node_ver', which is not a NodeSource build."
+	     echo "       deb.nodesource.com was probably unreachable and apt fell back to Debian."
+	     exit 1 ;;
+esac
+
+# Hash-lock: sha256 of every downloaded .deb (supply-chain integrity).
+( cd /var/cache/apt/archives \
+	&& find . -type f -iname '*.deb' -exec sha256sum {} \; \
+	| sed 's|\./||g' | LC_ALL=C sort \
+) > /config/lock/build-toolchain-hash-lock.txt
+
+# Version-lock: exact pkg=version for each downloaded .deb.
+for deb in /var/cache/apt/archives/*.deb; do
+	echo "$(dpkg-deb -f "$deb" Package)=$(dpkg-deb -f "$deb" Version)"
+done | LC_ALL=C sort > /config/lock/build-toolchain-version-lock.list
+
+chown -R "${LOCAL_USER:-0}" /config/lock
+echo "Locked $(wc -l < /config/lock/build-toolchain-version-lock.list) Debian packages (live + snapshot ${snapshot_date})"

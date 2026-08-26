@@ -1,0 +1,30 @@
+# Tools installed INTO the deb-builder image (kiosk-deb-builder).
+#
+# BUILD-TIME ONLY — none of these ship in the kiosk image. What goes into the
+# shipped image is os-builder/rootfs-packages.list instead.
+#
+# This is the hand-edited INPUT (names only). After changing it run
+#   make builder-update
+# which resolves it against the pinned Debian snapshot and regenerates
+#   lock/build-toolchain-version-lock.list   (exact pkg=version)
+#   lock/build-toolchain-hash-lock.txt       (sha256 of every .deb)
+# Those locks are what actually get installed, and are verified at image-build
+# time — so a toolchain bump shows up as a reviewable commit diff.
+
+# --- compile + package the Electron app ---
+# From NodeSource, not Debian. The exact version is derived from .nvmrc and
+# rewritten in place by packages-update, so this line is generated — edit
+# .nvmrc and re-run `make builder-update` instead of editing it here.
+# NodeSource's nodejs bundles corepack (which provisions the yarn named by
+# app/package.json packageManager), so Debian's node-corepack is not used.
+
+nodejs=24.15.0-1nodesource1
+dpkg-dev            # dpkg-deb, used by electron-forge's maker-deb
+fakeroot            # lets maker-deb stage root-owned files without being root
+
+# --- support ---
+
+ca-certificates     # HTTPS to the npm registry for `yarn install`
+git                 # electron-forge pulls @electron/node-gyp from a git URL
+curl                # used by yarn/corepack to fetch the pinned yarn release
+xz-utils            # electron distributions are xz-compressed
