@@ -31,6 +31,15 @@ tar -C "$REPO/app" -cf - \
 	--exclude=.git . \
 	| tar -C "$WORK/app" -xf -
 
+# Normalize permissions regardless of umask or upstream tooling:
+# git only tracks the executable bit, so a developer with umask 002 produces
+# 0664/0775 files/dirs while CI with umask 022 produces 0644/0755 -- causing
+# electron-forge to emit a differently-permissioned resources/app and therefore
+# a different deb and image hash.  Force everything to git's canonical modes.
+find "$WORK/app" -type f ! -perm /111 -exec chmod 644 {} +  # non-executable files -> 644
+find "$WORK/app" -type f   -perm /111 -exec chmod 755 {} +  # executable files -> 755
+find "$WORK/app" -type d              -exec chmod 755 {} +  # directories -> 755
+
 cd "$WORK/app"
 yarn install --immutable
 yarn run make
