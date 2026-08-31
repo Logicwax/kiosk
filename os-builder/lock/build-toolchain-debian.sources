@@ -25,9 +25,3 @@ Suites: trixie-security
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
 Check-Valid-Until: no
-
-Types: deb
-URIs: https://deb.nodesource.com/node_24.x/
-Suites: nodistro
-Components: main
-Signed-By: /usr/share/keyrings/nodesource.asc

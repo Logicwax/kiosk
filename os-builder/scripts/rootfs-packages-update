@@ -21,6 +21,44 @@ WORK=/tmp/rootfs-lock
 : "${SOURCE_DATE_EPOCH:=1}"
 export SOURCE_DATE_EPOCH
 
+# Update the rootfs snapshot date to today, independently of the toolchain
+# snapshot date in build-toolchain-debian.sources. Both files share the same format and live
+# mirror stanzas; only the snapshot timestamp differs.
+snapshot_url="http://snapshot.debian.org/archive/debian"
+snapshot_date="$(date +%Y%m%dT000000Z)"
+distro="$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2)"
+
+cat > "$LOCK/rootfs-debian.sources" <<-EOF
+	Types: deb
+	URIs: http://deb.debian.org/debian
+	Suites: ${distro} ${distro}-updates
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+	Check-Valid-Until: no
+
+	Types: deb
+	URIs: ${snapshot_url}/${snapshot_date}
+	Suites: ${distro} ${distro}-updates
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+	Check-Valid-Until: no
+
+	Types: deb
+	URIs: http://deb.debian.org/debian-security
+	Suites: ${distro}-security
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+	Check-Valid-Until: no
+
+	Types: deb
+	URIs: ${snapshot_url}-security/${snapshot_date}
+	Suites: ${distro}-security
+	Components: main
+	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+	Check-Valid-Until: no
+EOF
+echo "==> rootfs snapshot date: ${snapshot_date}"
+
 # Strip inline AND whole-line `#` comments (same convention as
 # build-toolchain-pkgs.list) — an unstripped inline comment reaches apt as bogus
 # package names and fails the bootstrap.
@@ -31,7 +69,7 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 # Because we pass an explicit deb822 sources file as MIRROR, that file governs
 # package resolution AND is copied verbatim into the target's apt config — the
 # SUITE is inert (verified: passing 'bookworm' still produced a trixie rootfs).
-# It is positionally required, so keep it matching debian.sources; nothing will
+# It is positionally required, so keep it matching rootfs-debian.sources; nothing will
 # warn you if the two drift apart.
 echo "==> resolving the rootfs package closure"
 # Keep the downloaded .debs so we can hash them (apt/mmdebstrap clean by default).
@@ -45,7 +83,7 @@ mmdebstrap \
 	--customize-hook='mkdir -p /tmp/rootfs-lock/archives && cp -n "$1"/var/cache/apt/archives/*.deb /tmp/rootfs-lock/archives/ 2>/dev/null || true' \
 	trixie \
 	"$WORK/root" \
-	"$LOCK/debian.sources"
+	"$LOCK/rootfs-debian.sources"
 
 # Version lock: parse the target's dpkg status directly (no chroot needed).
 python3 - "$WORK/root/var/lib/dpkg/status" "$LOCK/rootfs-package-version-lock.list" <<'PY'

@@ -16,17 +16,17 @@ ENV SOURCE_DATE_EPOCH=1 \
     LANG=C.UTF-8 \
     DEBIAN_FRONTEND=noninteractive
 
-# Copy ONLY what `packages-install` needs at image-build time. Everything else
+# Copy ONLY what `build-toolchain-packages-install` needs at image-build time. Everything else
 # in os-builder/ (build-os.sh, genimage-*.cfg, files/, rootfs-packages.list
 # and the rootfs-* locks) is read at RUN time from the /repo bind mount, so
 # copying it here would bake stale duplicates into the image AND make every edit
 # to those files invalidate this layer — forcing a full toolchain reinstall.
 COPY build-toolchain-pkgs.list /config/
-COPY lock/debian.sources /config/lock/
+COPY lock/build-toolchain-debian.sources /config/lock/
 COPY lock/build-toolchain-version-lock.list /config/lock/
 COPY lock/build-toolchain-hash-lock.txt /config/lock/
 COPY scripts/ /usr/local/bin/
 RUN touch /.dockerenv
 
 # Snapshot-pinned, version + hash locked builder toolchain.
-RUN packages-install
+RUN build-toolchain-packages-install

@@ -7,7 +7,7 @@
 # build-toolchain-hash-lock.txt (fails on any mismatch), then installs.
 set -e
 
-cp /config/lock/debian.sources /etc/apt/sources.list.d/debian.sources
+cp /config/lock/build-toolchain-debian.sources /etc/apt/sources.list.d/debian.sources
 apt-get update
 
 # Download the exact locked versions (retry through snapshot.d.o throttling).
