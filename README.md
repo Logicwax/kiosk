@@ -124,10 +124,10 @@ Every input is pinned in a committed lock file:
 
 | What | Where |
 |---|---|
-| Base image digest | `*/lock/debian-hash-lock.txt` |
+| Base image digest | `*/lock/debian-img-hash-lock.txt` |
 | apt sources + snapshot date | `*/lock/debian.sources` |
 | Builder toolchain versions/hashes | `*/lock/build-toolchain-*-lock.*` |
-| Packages shipped in the image | `os-builder/lock/rootfs-package-*-lock.*` |
+| Packages shipped in the image | `os-builder/lock/rootfs-pkgs-*-lock.*` |
 
 #### Refreshing the dependency locks
 
@@ -153,7 +153,7 @@ Individual steps, if you only need one: `base-image-update`, `builder-update`,
 > 3. `make build`
 >
 > **Step 2 is not optional and its absence is silent.** The build installs the
-> package set from `rootfs-package-version-lock.list`, never from
+> package set from `rootfs-pkgs-version-lock.list`, never from
 > `rootfs-packages.list`, so a package added without relocking simply never appears
 > in the image — and the build still succeeds.
 
@@ -226,7 +226,7 @@ Makefile                    # build / flash / test-boot / lock-update targets
 VERSION                     # image version string
 app/                        # minimal Electron app (main.js + src/)
 deb-builder/                # pinned builder image that compiles the app -> .deb
-  Dockerfile, build-deb.sh, build-toolchain-pkgs.list, lock/, scripts/
+  Dockerfile, build-deb.sh, pkgs.list, lock/, scripts/
 os-builder/                 # pinned builder image that assembles the OS image
   Dockerfile, build-os.sh
   genimage-grub.cfg         # ESP layout for BOOT=grub

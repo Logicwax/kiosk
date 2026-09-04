@@ -55,8 +55,8 @@ rm -rf "$WORK"; mkdir -p "$ROOTFS"
 # defines the whole rootfs; with bare names apt would take the highest version
 # across the live+snapshot sources, so any
 # Debian security update would silently change the image. Regenerate the lock
-# deliberately with `make rootfs-packages-update`.
-LOCKFILE="$REPO/os-builder/lock/rootfs-package-version-lock.list"
+# deliberately with `make rootfs-pkgs-update`.
+LOCKFILE="$REPO/os-builder/lock/rootfs-pkgs-version-lock.list"
 if [ -s "$LOCKFILE" ]; then
 	PKG_LIST="$(grep -vE '^\s*(#|$)' "$LOCKFILE" | paste -sd, -)"
 	echo "==> using pinned rootfs package versions ($(grep -cvE '^\s*(#|$)' "$LOCKFILE") packages)"
@@ -65,7 +65,7 @@ else
 	# without it would silently install only the handful of names in
 	# rootfs-packages.list and produce a broken rootfs that still "succeeded".
 	echo "ERROR: no rootfs version lock at $LOCKFILE." >&2
-	echo "       Run 'make rootfs-packages-update' first — it discovers the package set" >&2
+	echo "       Run 'make rootfs-pkgs-update' first — it discovers the package set" >&2
 	echo "       with --variant=important and records it for --variant=custom." >&2
 	exit 1
 fi
@@ -92,7 +92,7 @@ echo "==> mmdebstrap: bootstrapping rootfs"
 # set in one go before installing anything, so every .deb is present at
 # --extract-hook and one exact check covers all of them. (Under --variant=important
 # there were two phases with the cache wiped between them, needing a lock each.)
-HASHLOCK="$REPO/os-builder/lock/rootfs-package-hash-lock.txt"
+HASHLOCK="$REPO/os-builder/lock/rootfs-pkgs-hash-lock.txt"
 
 mmdebstrap \
 	--mode=unshare \
@@ -100,7 +100,7 @@ mmdebstrap \
 	--format=directory \
 	--include="$PKG_LIST" \
 	--aptopt='APT::Keep-Downloaded-Packages "true"' \
-	--extract-hook="/repo/os-builder/scripts/rootfs-verify-deb-packages \"\$1\" '$HASHLOCK' rootfs" \
+	--extract-hook="/repo/os-builder/scripts/rootfs-verify-deb-pkgs \"\$1\" '$HASHLOCK' rootfs" \
 	--customize-hook="copy-in $KIOSK_DEB /tmp" \
 	--customize-hook="chroot \"\$1\" apt-get install -y --no-install-recommends /tmp/$(basename "$KIOSK_DEB")" \
 	--customize-hook="chroot \"\$1\" rm -f /tmp/$(basename "$KIOSK_DEB")" \
@@ -108,7 +108,7 @@ mmdebstrap \
 	"$ROOTFS" \
 	"$REPO/os-builder/lock/rootfs-debian.sources"
 
-# Composition check: rootfs-verify-deb-packages proved every downloaded .deb was locked; this
+# Composition check: rootfs-verify-deb-pkgs proved every downloaded .deb was locked; this
 # proves the rootfs ended up holding exactly the locked set. The app .deb is the
 # one sanctioned addition — it is copied in and dpkg-installed, so it never passes
 # through the hash lock.
@@ -116,14 +116,14 @@ APP_PKG="$(dpkg-deb -f "$KIOSK_DEB" Package)=$(dpkg-deb -f "$KIOSK_DEB" Version)
 # Deliberately checked HERE, before configure-rootfs.sh. The locks describe what
 # mmdebstrap is allowed to bring in; configuration afterwards is free to add or
 # remove packages without tripping a lock.
-"$REPO/os-builder/scripts/rootfs-verify-installed-packages" "$ROOTFS" "$LOCKFILE" "$APP_PKG" "after mmdebstrap, before configure"
+"$REPO/os-builder/scripts/rootfs-verify-installed-pkgs" "$ROOTFS" "$LOCKFILE" "$APP_PKG" "after mmdebstrap, before configure"
 
 # ---------------------------------------------------------------------------
 # 2. configuration (configure-rootfs.sh, plain bash against $ROOTFS)
 # ---------------------------------------------------------------------------
 echo "==> configure: applying rootfs configuration"
 # The roles are pure configuration: the package set was installed by mmdebstrap
-# from rootfs-package-version-lock.list and already verified above, and boot is
+# from rootfs-pkgs-version-lock.list and already verified above, and boot is
 # assembled by ukify/grub+genimage below. Anything the roles add or remove after
 # this point is deliberately outside the locks.
 #

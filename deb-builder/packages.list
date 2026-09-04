@@ -6,8 +6,8 @@
 # This is the hand-edited INPUT (names only). After changing it run
 #   make builder-update
 # which resolves it against the pinned Debian snapshot and regenerates
-#   lock/build-toolchain-version-lock.list   (exact pkg=version)
-#   lock/build-toolchain-hash-lock.txt       (sha256 of every .deb)
+#   lock/packages-version-lock.list   (exact pkg=version)
+#   lock/packages-hash-lock.txt       (sha256 of every .deb)
 # Those locks are what actually get installed, and are verified at image-build
 # time — so a toolchain bump shows up as a reviewable commit diff.
 

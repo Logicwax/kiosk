@@ -60,7 +60,7 @@ EOF
 echo "==> rootfs snapshot date: ${snapshot_date}"
 
 # Strip inline AND whole-line `#` comments (same convention as
-# build-toolchain-pkgs.list) — an unstripped inline comment reaches apt as bogus
+# build-toolchain-packages.list) — an unstripped inline comment reaches apt as bogus
 # package names and fails the bootstrap.
 PKG_LIST="$(sed 's/#.*//; s/[[:space:]]*$//' "$CONFIG/rootfs-packages.list" | grep -v '^$' | paste -sd, -)"
 
@@ -86,7 +86,7 @@ mmdebstrap \
 	"$LOCK/rootfs-debian.sources"
 
 # Version lock: parse the target's dpkg status directly (no chroot needed).
-python3 - "$WORK/root/var/lib/dpkg/status" "$LOCK/rootfs-package-version-lock.list" <<'PY'
+python3 - "$WORK/root/var/lib/dpkg/status" "$LOCK/rootfs-pkgs-version-lock.list" <<'PY'
 import sys
 status, out = sys.argv[1], sys.argv[2]
 pkgs, cur = [], {}
@@ -112,8 +112,8 @@ if compgen -G "$WORK/archives/*.deb" > /dev/null; then
 	( cd "$WORK/archives" \
 		&& find . -type f -iname '*.deb' -exec sha256sum {} \; \
 		| sed 's|\./||g' | LC_ALL=C sort \
-	) > "$LOCK/rootfs-package-hash-lock.txt"
-	echo "hashed $(wc -l < "$LOCK/rootfs-package-hash-lock.txt") .deb files"
+	) > "$LOCK/rootfs-pkgs-hash-lock.txt"
+	echo "hashed $(wc -l < "$LOCK/rootfs-pkgs-hash-lock.txt") .deb files"
 else
 	# Never leave a stale lock in place while reporting success: the build would
 	# then verify against versions this run never actually resolved.
@@ -125,8 +125,8 @@ fi
 # stale file cannot be picked up by a build that no longer expects it.
 rm -f "$LOCK"/rootfs-bootstrap-package-hash-lock.txt \
       "$LOCK"/rootfs-apt-package-hash-lock.txt \
-      "$LOCK"/rootfs-package-hash-lock-bootstrap.txt \
-      "$LOCK"/rootfs-package-hash-lock-apt.txt
+      "$LOCK"/rootfs-pkgs-hash-lock-bootstrap.txt \
+      "$LOCK"/rootfs-pkgs-hash-lock-apt.txt
 
 chown -R "${LOCAL_USER:-0}" "$LOCK"
 rm -rf "$WORK"

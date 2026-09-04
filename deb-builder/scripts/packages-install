@@ -3,8 +3,8 @@
 #
 # Overwrites the base image's debian.sources with the locked deb822 file (live +
 # snapshot failover), downloads exactly the versions in
-# build-toolchain-version-lock.list from the snapshot, verifies every .deb against
-# build-toolchain-hash-lock.txt (fails on any mismatch), then installs.
+# packages-version-lock.list from the snapshot, verifies every .deb against
+# packages-hash-lock.txt (fails on any mismatch), then installs.
 set -e
 
 # The locked debian.sources references the NodeSource key, so put it in place
@@ -29,7 +29,7 @@ apt-get update
 
 # Download the exact locked versions (retry through snapshot.d.o throttling).
 until apt-get install --download-only --allow-downgrades -y \
-		$(cat /config/lock/build-toolchain-version-lock.list); do
+		$(cat /config/lock/packages-version-lock.list); do
 	echo "apt download failed (snapshot throttling?); retrying in 60s..."
 	sleep 60
 done
@@ -39,11 +39,11 @@ done
 	&& find . -type f -iname '*.deb' -exec sha256sum {} \; \
 	| sed 's|\./||g' | LC_ALL=C sort \
 ) > /tmp/toolchain-hash-compare.txt
-if ! diff -q /config/lock/build-toolchain-hash-lock.txt /tmp/toolchain-hash-compare.txt >/dev/null; then
+if ! diff -q /config/lock/packages-hash-lock.txt /tmp/toolchain-hash-compare.txt >/dev/null; then
 	echo "Package hash mismatch — possible supply-chain tampering!"
-	diff /config/lock/build-toolchain-hash-lock.txt /tmp/toolchain-hash-compare.txt || true
+	diff /config/lock/packages-hash-lock.txt /tmp/toolchain-hash-compare.txt || true
 	exit 1
 fi
 
-apt-get install --allow-downgrades -y $(sed 's/#.*//' /config/build-toolchain-pkgs.list)
+apt-get install --allow-downgrades -y $(sed 's/#.*//' /config/packages.list)
 rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* /tmp/*

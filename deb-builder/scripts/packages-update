@@ -93,19 +93,19 @@ fi
 echo "nodejs $NODE_VERSION -> $node_pkg_ver (from .nvmrc)"
 # Keep the pkgs list in step, so packages-install (which installs by name from it)
 # gets the same exact version at image-build time.
-sed -i "s|^nodejs=.*|nodejs=${node_pkg_ver}|" /config/build-toolchain-pkgs.list
+sed -i "s|^nodejs=.*|nodejs=${node_pkg_ver}|" /config/packages.list
 # Fail closed: if that line is not of the form `nodejs=<version>` the sed matches
 # nothing and says so in no way at all — the lock would then resolve whatever
 # NodeSource currently serves, silently ignoring .nvmrc.
-grep -qx "nodejs=${node_pkg_ver}" /config/build-toolchain-pkgs.list || {
-	echo "ERROR: build-toolchain-pkgs.list has no 'nodejs=<version>' line to pin."
+grep -qx "nodejs=${node_pkg_ver}" /config/packages.list || {
+	echo "ERROR: packages.list has no 'nodejs=<version>' line to pin."
 	echo "       Expected to write nodejs=${node_pkg_ver}; the list must contain a"
 	echo "       bare 'nodejs=...' line (no trailing comment) for this to work."
 	exit 1
 }
 
 # Download (only) the packages we add plus any not-yet-present dependencies.
-apt-get install -y --download-only $(sed 's/#.*//' /config/build-toolchain-pkgs.list)
+apt-get install -y --download-only $(sed 's/#.*//' /config/packages.list)
 
 # Fail closed: apt treats an unreachable source as a warning and falls back to
 # another one, so verify the resolved nodejs really is the NodeSource build. A
@@ -124,12 +124,12 @@ esac
 ( cd /var/cache/apt/archives \
 	&& find . -type f -iname '*.deb' -exec sha256sum {} \; \
 	| sed 's|\./||g' | LC_ALL=C sort \
-) > /config/lock/build-toolchain-hash-lock.txt
+) > /config/lock/packages-hash-lock.txt
 
 # Version-lock: exact pkg=version for each downloaded .deb.
 for deb in /var/cache/apt/archives/*.deb; do
 	echo "$(dpkg-deb -f "$deb" Package)=$(dpkg-deb -f "$deb" Version)"
-done | LC_ALL=C sort > /config/lock/build-toolchain-version-lock.list
+done | LC_ALL=C sort > /config/lock/packages-version-lock.list
 
 chown -R "${LOCAL_USER:-0}" /config/lock
-echo "Locked $(wc -l < /config/lock/build-toolchain-version-lock.list) Debian packages (live + snapshot ${snapshot_date})"
+echo "Locked $(wc -l < /config/lock/packages-version-lock.list) Debian packages (live + snapshot ${snapshot_date})"
