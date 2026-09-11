@@ -1,5 +1,6 @@
 .packer/
 build/
+.cache/
 os-builder/secureboot/
 app/node_modules/
 app/out/

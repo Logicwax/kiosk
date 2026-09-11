@@ -82,6 +82,20 @@ DISK=/dev/sdX make flash-disk   # write it to a USB stick
 make test-boot                  # boot it in QEMU (for testing purposes)
 ```
 
+Useful sub-targets:
+
+| Target | Does |
+|---|---|
+| `make build` | full image, grub boot chain, unsigned, no prompts |
+| `make build BOOT=uki` | image with an unsigned UKI |
+| `make build BOOT=uki BOOTSIGN=yes` | image with a signed UKI (needs the SB key) |
+| `make deb-package` | just the app `.deb` (stages 1–2) |
+| `make build-deb-check` | builds the `.deb` twice and compares |
+| `make test-boot` | boots the image in QEMU |
+| `make secureboot-key` | generate a dev Secure Boot key/cert |
+| `make clean` | removes `build/` and the frontend's build artifacts |
+
+
 ## Boot chains
 
 `BOOT` picks the boot chain; `BOOTSIGN` only applies to `BOOT=uki`.
@@ -91,6 +105,15 @@ make test-boot                  # boot it in QEMU (for testing purposes)
 | `make build` | **grub** (default) | ✅ boots, **nothing to enroll** | ✅ |
 | `make build BOOT=uki` | unsigned UKI | ⚠️ needs a *hash* enroll, per image, per machine | ✅ |
 | `make build BOOT=uki BOOTSIGN=yes` | signed UKI | ⚠️ needs a *certificate* enroll, once per machine | ❌ |
+
+What each verifies:
+
+| | `grub` | `uki` |
+|---|---|---|
+| bootloader | ✅ | ✅ |
+| kernel | ✅ | ✅ |
+| **initrd** | ❌ | ✅ |
+| **kernel cmdline** | ❌ | ✅ |
 
 **`BOOT=grub`** ships the stock Debian chain, every link signed by a key the machine
 already trusts:

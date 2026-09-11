@@ -60,6 +60,20 @@ IMG_GZ := $(RAW).gz
 DEBIAN_HASH    := $(strip $(shell cat deb-builder/lock/debian-img-hash-lock.txt))
 OS_DEBIAN_HASH := $(strip $(shell cat os-builder/lock/build-toolchain-debian-img-hash-lock.txt))
 
+# Docker builder-image cache: the .tar is a real on-disk artifact `docker
+# buildx build` alone doesn't leave behind, so Make can compare its mtime
+# against the Dockerfile/locks/scripts below and skip the rebuild entirely
+# when nothing changed. The .state file records the loaded image ID; it's
+# reloaded from the .tar (no rebuild) if something (e.g. `docker image
+# prune`) evicted it from the daemon. Lives outside build/ (which `clean`
+# wipes on every run) since this cache should only be dropped deliberately
+# via `distclean`.
+DOCKER_CACHE_DIR := .cache
+DEB_BUILDER_TAR   := $(DOCKER_CACHE_DIR)/deb-builder.tar
+DEB_BUILDER_STATE := $(DOCKER_CACHE_DIR)/deb-builder.state
+OS_BUILDER_TAR    := $(DOCKER_CACHE_DIR)/os-builder.tar
+OS_BUILDER_STATE  := $(DOCKER_CACHE_DIR)/os-builder.state
+
 # Prints a clearly visible banner so each build stage stands out in the log
 # instead of scrolling past as one undifferentiated wall of text.
 define stage
@@ -85,6 +99,9 @@ distclean: clean
 	yarn cache clean --all
 	docker image rm -f kiosk-deb-builder kiosk-os-builder 2>/dev/null || true
 	docker buildx prune --force --builder reproducible-builder 2>/dev/null || true
+	# Remove the .tar/.state builder-image cache so the next `make build`
+	# re-runs `docker buildx build` from scratch too.
+	rm -rf $(DOCKER_CACHE_DIR)
 
 # ---------------------------------------------------------------------------
 # Attestation. Whoever builds this can sign the manifest of what they built, and
@@ -122,8 +139,23 @@ check-buildx-driver:
 # ---------------------------------------------------------------------------
 # stages 1-2: the app, compiled reproducibly into a .deb
 # ---------------------------------------------------------------------------
-deb-package: check-buildx-driver
-	$(call stage,STAGE 1/3  Build the .deb builder image + compile the app ($(DEB_BUILDER_IMAGE)))
+# Build the deb-builder image, gated by Make's ordinary freshness check against
+# the Dockerfile, lock files and scripts it actually depends on (see the
+# Dockerfile's COPY list) — `docker buildx build` only runs when one of those
+# changed, instead of on every `make deb-package`.
+$(DEB_BUILDER_TAR): \
+	deb-builder/Dockerfile \
+	deb-builder/packages.list \
+	deb-builder/pgp/nodesource.asc \
+	deb-builder/lock/debian.sources \
+	deb-builder/lock/debian-img-hash-lock.txt \
+	deb-builder/lock/packages-version-lock.list \
+	deb-builder/lock/packages-hash-lock.txt \
+	$(wildcard deb-builder/scripts/*) \
+	| check-buildx-driver
+
+	$(call stage,STAGE 1/3  Build the .deb builder image ($(DEB_BUILDER_IMAGE)))
+	mkdir -p $(DOCKER_CACHE_DIR)
 	SOURCE_DATE_EPOCH=1 docker buildx build \
 		--build-arg DEBIAN_HASH=$(DEBIAN_HASH) \
 		--build-arg SOURCE_DATE_EPOCH=1 \
@@ -131,6 +163,15 @@ deb-package: check-buildx-driver
 		--provenance=false \
 		--output type=docker,name=$(DEB_BUILDER_IMAGE),rewrite-timestamp=true,annotation.org.opencontainers.image.created=1970-01-01T00:00:01Z \
 		deb-builder
+	docker save $(DEB_BUILDER_IMAGE) -o $@
+
+$(DEB_BUILDER_STATE): $(DEB_BUILDER_TAR)
+	docker inspect $(DEB_BUILDER_IMAGE) > /dev/null 2>&1 || docker load -i $(DEB_BUILDER_TAR)
+	docker images --no-trunc --quiet $(DEB_BUILDER_IMAGE) > $@
+
+deb-package: check-buildx-driver $(DEB_BUILDER_STATE)
+	@docker inspect $(DEB_BUILDER_IMAGE) > /dev/null 2>&1 || docker load -i $(DEB_BUILDER_TAR)
+	$(call stage,STAGE 1/3  Compile the app ($(DEB_BUILDER_IMAGE)))
 	mkdir -p build
 	docker run --rm $(DOCKER_CPUSET) \
 		-v $(CURDIR):/repo \
@@ -155,8 +196,18 @@ build-deb-check:
 # ---------------------------------------------------------------------------
 # stages 3-4: the OS image
 # ---------------------------------------------------------------------------
-os-builder: check-buildx-driver
+$(OS_BUILDER_TAR): \
+	os-builder/Dockerfile \
+	os-builder/build-toolchain-packages.list \
+	os-builder/lock/build-toolchain-debian.sources \
+	os-builder/lock/build-toolchain-debian-img-hash-lock.txt \
+	os-builder/lock/build-toolchain-pkgs-version-lock.list \
+	os-builder/lock/build-toolchain-pkgs-hash-lock.txt \
+	$(wildcard os-builder/scripts/*) \
+	| check-buildx-driver
+
 	$(call stage,STAGE 2/3  Build the OS builder image ($(OS_BUILDER_IMAGE)))
+	mkdir -p $(DOCKER_CACHE_DIR)
 	SOURCE_DATE_EPOCH=1 docker buildx build \
 		--build-arg DEBIAN_HASH=$(OS_DEBIAN_HASH) \
 		--build-arg SOURCE_DATE_EPOCH=1 \
@@ -164,6 +215,14 @@ os-builder: check-buildx-driver
 		--provenance=false \
 		--output type=docker,name=$(OS_BUILDER_IMAGE),rewrite-timestamp=true,annotation.org.opencontainers.image.created=1970-01-01T00:00:01Z \
 		os-builder
+	docker save $(OS_BUILDER_IMAGE) -o $@
+
+$(OS_BUILDER_STATE): $(OS_BUILDER_TAR)
+	docker inspect $(OS_BUILDER_IMAGE) > /dev/null 2>&1 || docker load -i $(OS_BUILDER_TAR)
+	docker images --no-trunc --quiet $(OS_BUILDER_IMAGE) > $@
+
+os-builder: check-buildx-driver $(OS_BUILDER_STATE)
+	@docker inspect $(OS_BUILDER_IMAGE) > /dev/null 2>&1 || docker load -i $(OS_BUILDER_TAR)
 
 # Validate the boot flags BEFORE building anything — build-os.sh checks these too,
 # but only after the .deb and both builder images are built.
