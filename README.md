@@ -242,6 +242,27 @@ on the USB is ever modified. The app runs as **`airgap`**, autologin on tty1, wh
 `exec startx`s straight into `/usr/bin/kiosk` with **no window manager** (Electron sizes
 its own full-screen window).
 
+## Troubleshooting
+
+### `apt-get`/buildx DNS timeouts
+
+Build hangs or times out resolving package mirrors (or buildx reports
+`dial tcp: lookup registry-1.docker.io: i/o timeout`) even though the host
+resolves DNS fine.
+
+Root cause: builds use the buildx `docker-container` driver, which runs
+BuildKit in its own container. That container's `/etc/resolv.conf` is
+written once from the host's resolver at container-creation time and never
+updated. If the host's DNS changes afterward (VPN connect/disconnect, wifi
+switch, corporate DNS reassignment), the builder container keeps querying
+the stale, now-unreachable nameserver.
+
+Solution:
+
+```bash
+sudo systemctl restart docker
+```
+
 ## Layout
 
 ```
