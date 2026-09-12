@@ -87,55 +87,92 @@ fi
 # SUITE is inert (verified: passing 'bookworm' still produced a trixie rootfs).
 # It is positionally required, so keep it matching rootfs-debian.sources; nothing will
 # warn you if the two drift apart.
-echo "==> mmdebstrap: bootstrapping rootfs"
+#
 # Hash enforcement: with --variant=custom mmdebstrap downloads the whole locked
 # set in one go before installing anything, so every .deb is present at
 # --extract-hook and one exact check covers all of them. (Under --variant=important
 # there were two phases with the cache wiped between them, needing a lock each.)
 HASHLOCK="$REPO/os-builder/lock/rootfs-pkgs-hash-lock.txt"
+SOURCESFILE="$REPO/os-builder/lock/rootfs-debian.sources"
 
-mmdebstrap \
-	--mode=unshare \
-	--variant=custom \
-	--format=directory \
-	--include="$PKG_LIST" \
-	--aptopt='APT::Keep-Downloaded-Packages "true"' \
-	--extract-hook="/repo/os-builder/scripts/rootfs-verify-deb-pkgs \"\$1\" '$HASHLOCK' rootfs" \
-	--customize-hook="copy-in $KIOSK_DEB /tmp" \
-	--customize-hook="chroot \"\$1\" apt-get install -y --no-install-recommends /tmp/$(basename "$KIOSK_DEB")" \
-	--customize-hook="chroot \"\$1\" rm -f /tmp/$(basename "$KIOSK_DEB")" \
-	trixie \
-	"$ROOTFS" \
-	"$REPO/os-builder/lock/rootfs-debian.sources"
-
-# Composition check: rootfs-verify-deb-pkgs proved every downloaded .deb was locked; this
-# proves the rootfs ended up holding exactly the locked set. The app .deb is the
-# one sanctioned addition — it is copied in and dpkg-installed, so it never passes
-# through the hash lock.
-APP_PKG="$(dpkg-deb -f "$KIOSK_DEB" Package)=$(dpkg-deb -f "$KIOSK_DEB" Version)"
-# Deliberately checked HERE, before configure-rootfs.sh. The locks describe what
-# mmdebstrap is allowed to bring in; configuration afterwards is free to add or
-# remove packages without tripping a lock.
-"$REPO/os-builder/scripts/rootfs-verify-installed-pkgs" "$ROOTFS" "$LOCKFILE" "$APP_PKG" "after mmdebstrap, before configure"
-
-# ---------------------------------------------------------------------------
-# 2. configuration (configure-rootfs.sh, plain bash against $ROOTFS)
-# ---------------------------------------------------------------------------
-echo "==> configure: applying rootfs configuration"
-# The roles are pure configuration: the package set was installed by mmdebstrap
-# from rootfs-pkgs-version-lock.list and already verified above, and boot is
-# assembled by ukify/grub+genimage below. Anything the roles add or remove after
-# this point is deliberately outside the locks.
+# Cache: mmdebstrap's OS-package bootstrap is a pure function of the rootfs
+# locks and the toolchain building them (Dockerfile + build-toolchain locks —
+# a different pinned mmdebstrap/apt/dpkg could resolve the same rootfs lock
+# differently). Also hashed: *-packages.list (feeds the locks, so an edit not
+# yet relocked is exactly when a stale cache would mislead) and build-os.sh
+# itself (it decides how the lock becomes an --include list). Not hashed:
+# configure-rootfs.sh, genimage configs etc. — pure post-install
+# configuration this repo already keeps decoupled from the package lock.
+# `os-builder/lock/*` covers both lock sets in one glob.
 #
-# Temporary resolv.conf so any task needing the network can resolve; removed
-# again below so no host DNS config is baked into the image.
-cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
+# Cache the OS-only rootfs (before the app .deb goes in) as a tar keyed by a
+# hash of those inputs, so an unchanged lock/toolchain skips both the network
+# fetch and the dpkg unpack/install on every subsequent build. /rootfs-cache
+# holds only tar files, chowned back below like the final .img.
+CACHE_DIR=/rootfs-cache
+CACHE_KEY="$({
+	mmdebstrap --version
+	cat \
+		"$REPO/os-builder/Dockerfile" \
+		"$REPO/os-builder/lock/"* \
+		"$REPO/os-builder/build-toolchain-packages.list" \
+		"$REPO/os-builder/rootfs-packages.list" \
+		"$REPO/os-builder/build-os.sh"
+} | sha256sum | cut -d' ' -f1)"
+CACHE_TAR="$CACHE_DIR/rootfs-$CACHE_KEY.tar"
 
-# Minimal device nodes. The chroot has no /dev of its own, so tools
-# that need them fail (git: "unable to get random bytes" without /dev/urandom).
-# Created with mknod at their fixed, well-known major/minor numbers — universal
-# on every Linux system, so they add NO host coupling. They also legitimately
-# belong in the image; devtmpfs overmounts /dev at boot anyway.
+if [ -f "$CACHE_TAR" ] && [ -f "$CACHE_TAR.sha256" ] \
+	&& [ "$(sha256sum "$CACHE_TAR" | cut -d' ' -f1)" = "$(cat "$CACHE_TAR.sha256")" ]; then
+	echo "==> rootfs cache HIT ($CACHE_KEY): restoring OS-only rootfs, skipping mmdebstrap"
+	tar -C "$ROOTFS" --numeric-owner -xf "$CACHE_TAR"
+else
+	echo "==> rootfs cache MISS ($CACHE_KEY): bootstrapping rootfs with mmdebstrap"
+	mmdebstrap \
+		--mode=unshare \
+		--variant=custom \
+		--format=directory \
+		--include="$PKG_LIST" \
+		--aptopt='APT::Keep-Downloaded-Packages "true"' \
+		--extract-hook="/repo/os-builder/scripts/rootfs-verify-deb-pkgs \"\$1\" '$HASHLOCK' rootfs" \
+		trixie \
+		"$ROOTFS" \
+		"$SOURCESFILE"
+
+	# Written as a plain shell command after mmdebstrap has fully exited, not as
+	# one of its own hooks: a --customize-hook runs before mmdebstrap's own
+	# `unmount` phase, so /proc and /sys are still bind-mounted then — a
+	# tar-out from a customize-hook swept in the host's live /proc and /sys
+	# trees. Once mmdebstrap has exited both are unmounted and its cleanup
+	# phase has already stripped dpkg.log, apt lists/cache, and machine-id.
+	mkdir -p "$CACHE_DIR"
+	CACHE_TMP="$CACHE_DIR/.rootfs-$CACHE_KEY.tmp.tar"
+	tar -C "$ROOTFS" --numeric-owner --sort=name -cf "$CACHE_TMP" .
+	sha256sum "$CACHE_TMP" | cut -d' ' -f1 > "$CACHE_TMP.sha256"
+	# Prune entries from a previous lock/toolchain state, or .cache/ only
+	# grows across every lock bump. Matches "rootfs-*", not the
+	# ".rootfs-*.tmp.tar" just written above.
+	rm -f "$CACHE_DIR"/rootfs-*.tar "$CACHE_DIR"/rootfs-*.tar.sha256
+	mv "$CACHE_TMP" "$CACHE_TAR"
+	mv "$CACHE_TMP.sha256" "$CACHE_TAR.sha256"
+	chown "${HOST_UID:-0}:${HOST_GID:-0}" "$CACHE_TAR" "$CACHE_TAR.sha256"
+fi
+
+# Composition check on the OS-only layer, before the app .deb is added. On a
+# cache hit this is the check that matters: rootfs-verify-deb-pkgs only ran at
+# cache-write time, so this confirms the restored tree still matches the
+# current lock.
+"$REPO/os-builder/scripts/rootfs-verify-installed-pkgs" "$ROOTFS" "$LOCKFILE" "" "OS layer, before app package"
+
+# ---------------------------------------------------------------------------
+# 2. install the app package
+# ---------------------------------------------------------------------------
+# Plain chroot step, not an mmdebstrap --customize-hook: on a cache hit
+# mmdebstrap never runs, so a hook-only step would silently stop happening.
+# Must also run identically on both paths, or hit/miss outputs could diverge.
+#
+# kiosk.deb ships no maintainer scripts but does ship a .desktop file, which
+# activates the desktop-file-utils trigger during install — a real script,
+# so /proc is mounted here rather than assumed unnecessary.
 rm -f "$ROOTFS/dev/null"
 mkdir -p "$ROOTFS/dev"
 mknod -m 666 "$ROOTFS/dev/null"    c 1 3
@@ -144,6 +181,42 @@ mknod -m 666 "$ROOTFS/dev/full"    c 1 7
 mknod -m 666 "$ROOTFS/dev/random"  c 1 8
 mknod -m 666 "$ROOTFS/dev/urandom" c 1 9
 mknod -m 666 "$ROOTFS/dev/tty"     c 5 0
+mount -t proc proc "$ROOTFS/proc"
+cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
+
+cp "$KIOSK_DEB" "$ROOTFS/tmp/"
+chroot "$ROOTFS" apt-get install -y --no-install-recommends "/tmp/$(basename "$KIOSK_DEB")"
+rm -f "$ROOTFS/tmp/$(basename "$KIOSK_DEB")"
+
+umount "$ROOTFS/proc"
+
+# Composition check: proves the rootfs holds the OS lock plus exactly the app
+# package. The app .deb is the one sanctioned addition — copied in and
+# dpkg-installed, so it never passes through the rootfs hash lock.
+APP_PKG="$(dpkg-deb -f "$KIOSK_DEB" Package)=$(dpkg-deb -f "$KIOSK_DEB" Version)"
+# Deliberately checked HERE, before configure-rootfs.sh. The locks describe
+# what the OS layer plus the app package are allowed to bring in;
+# configuration afterwards is free to add or remove packages without tripping
+# a lock.
+"$REPO/os-builder/scripts/rootfs-verify-installed-pkgs" "$ROOTFS" "$LOCKFILE" "$APP_PKG" "after app package, before configure"
+
+# ---------------------------------------------------------------------------
+# 3. configuration (configure-rootfs.sh, plain bash against $ROOTFS)
+# ---------------------------------------------------------------------------
+echo "==> configure: applying rootfs configuration"
+# The roles are pure configuration: the package set was installed by mmdebstrap
+# (or restored from cache) from rootfs-pkgs-version-lock.list and already
+# verified above, and boot is assembled by ukify/grub+genimage below. Anything
+# the roles add or remove after this point is deliberately outside the locks.
+#
+# Temporary resolv.conf so any task needing the network can resolve; removed
+# again below so no host DNS config is baked into the image.
+cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
+
+# /dev nodes already exist from the app-package install step above; the chroot
+# has no /dev of its own otherwise (tools that need them fail — git: "unable
+# to get random bytes" without /dev/urandom), and they legitimately belong in
+# the image regardless (devtmpfs overmounts /dev at boot anyway).
 
 cd "$REPO"
 # The app user. Passed to the configure script rather than hardcoded inside it.
@@ -164,7 +237,7 @@ rm -f "$ROOTFS/var/lib/systemd/random-seed"
 echo "==> rootfs ready ($(du -sh "$ROOTFS" 2>/dev/null | cut -f1))"
 
 # ---------------------------------------------------------------------------
-# 3. image assembly
+# 4. image assembly
 # ---------------------------------------------------------------------------
 # Exactly one kernel is expected. `ls | head -1` would silently pick the
 # alphabetically-first of several — the same failure shape as the .deb selection
@@ -337,7 +410,7 @@ genimage \
 	--tmppath "$WORK/gtmp"
 
 # ---------------------------------------------------------------------------
-# 4. hand the finished image back (the only thing that leaves the container)
+# 5. hand the finished image back (the only thing that leaves the container)
 # ---------------------------------------------------------------------------
 mkdir -p "$OUT"
 IMG="$OUT/kiosk-v${VERSION}.img"

@@ -14,6 +14,7 @@
 	os-builder-update \
 	os-image \
 	rootfs-update \
+	rootfs-cache-clean \
 	secureboot-key \
 	sign \
 	verify \
@@ -73,6 +74,10 @@ DEB_BUILDER_TAR   := $(DOCKER_CACHE_DIR)/deb-builder.tar
 DEB_BUILDER_STATE := $(DOCKER_CACHE_DIR)/deb-builder.state
 OS_BUILDER_TAR    := $(DOCKER_CACHE_DIR)/os-builder.tar
 OS_BUILDER_STATE  := $(DOCKER_CACHE_DIR)/os-builder.state
+
+# Cache of the mmdebstrap-built OS-only rootfs (see os-builder/build-os.sh).
+# Stored directly in DOCKER_CACHE_DIR; distclean's existing
+# `rm -rf $(DOCKER_CACHE_DIR)` covers it with no extra rule.
 
 # Prints a clearly visible banner so each build stage stands out in the log
 # instead of scrolling past as one undifferentiated wall of text.
@@ -254,6 +259,7 @@ boot-check:
 # CAP_SYS_ADMIN to write uid_map.
 os-image: boot-check deb-package os-builder
 	$(call stage,STAGE 3/3  Assemble the OS image (mmdebstrap -> configure rootfs -> squashfs -> boot chain -> genimage))
+	mkdir -p $(DOCKER_CACHE_DIR)
 	docker run --rm $(DOCKER_CPUSET) \
 		--cap-add SYS_ADMIN \
 		--cap-add MKNOD \
@@ -261,6 +267,7 @@ os-image: boot-check deb-package os-builder
 		--security-opt apparmor=unconfined \
 		-v $(CURDIR):/repo \
 		-v $(CURDIR)/os-builder/secureboot:/secureboot \
+		-v $(CURDIR)/$(DOCKER_CACHE_DIR):/rootfs-cache \
 		-e HOST_UID=$(shell id -u) \
 		-e HOST_GID=$(shell id -g) \
 		-e KIOSK_BOOTSIGN=$(BOOTSIGN) \
@@ -355,6 +362,12 @@ rootfs-update: os-builder-update os-builder
 		-e LOCAL_USER=$(shell id -u):$(shell id -g) \
 		$(OS_BUILDER_IMAGE) \
 		/config/scripts/rootfs-pkgs-update
+
+# Force-invalidate the cached OS-only rootfs without waiting for a lock
+# change. Only the rootfs cache files — not the whole of DOCKER_CACHE_DIR,
+# which also holds the builder image tar/state caches.
+rootfs-cache-clean:
+	rm -f $(DOCKER_CACHE_DIR)/rootfs-*.tar $(DOCKER_CACHE_DIR)/rootfs-*.tar.sha256
 
 # Refresh EVERY pinned dependency except the app's yarn/node_modules (those live
 # in app/yarn.lock and are bumped deliberately with yarn, not here).
