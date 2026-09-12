@@ -93,7 +93,6 @@ fi
 # --extract-hook and one exact check covers all of them. (Under --variant=important
 # there were two phases with the cache wiped between them, needing a lock each.)
 HASHLOCK="$REPO/os-builder/lock/rootfs-pkgs-hash-lock.txt"
-SOURCESFILE="$REPO/os-builder/lock/rootfs-debian.sources"
 
 # Cache: mmdebstrap's OS-package bootstrap is a pure function of the rootfs
 # locks and the toolchain building them (Dockerfile + build-toolchain locks —
@@ -136,7 +135,7 @@ else
 		--extract-hook="/repo/os-builder/scripts/rootfs-verify-deb-pkgs \"\$1\" '$HASHLOCK' rootfs" \
 		trixie \
 		"$ROOTFS" \
-		"$SOURCESFILE"
+		"$REPO/os-builder/lock/rootfs-debian.sources"
 
 	# Written as a plain shell command after mmdebstrap has fully exited, not as
 	# one of its own hooks: a --customize-hook runs before mmdebstrap's own
@@ -182,7 +181,6 @@ mknod -m 666 "$ROOTFS/dev/random"  c 1 8
 mknod -m 666 "$ROOTFS/dev/urandom" c 1 9
 mknod -m 666 "$ROOTFS/dev/tty"     c 5 0
 mount -t proc proc "$ROOTFS/proc"
-cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
 
 cp "$KIOSK_DEB" "$ROOTFS/tmp/"
 chroot "$ROOTFS" apt-get install -y --no-install-recommends "/tmp/$(basename "$KIOSK_DEB")"
@@ -208,10 +206,6 @@ echo "==> configure: applying rootfs configuration"
 # (or restored from cache) from rootfs-pkgs-version-lock.list and already
 # verified above, and boot is assembled by ukify/grub+genimage below. Anything
 # the roles add or remove after this point is deliberately outside the locks.
-#
-# Temporary resolv.conf so any task needing the network can resolve; removed
-# again below so no host DNS config is baked into the image.
-cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
 
 # /dev nodes already exist from the app-package install step above; the chroot
 # has no /dev of its own otherwise (tools that need them fail — git: "unable

@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Enable containerd-snapshotter
         run: |
@@ -55,13 +55,63 @@ jobs:
       - name: Install host dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      # Keyed per job, same as the rootfs cache below: these builder images
+      # are built with the same reproducibility discipline (SOURCE_DATE_EPOCH,
+      # rewrite-timestamp, pinned digests) as the final disk image, so keeping
+      # build-1 and build-2 independent here means this workflow also
+      # (re-)verifies that the builder images themselves build reproducibly,
+      # not just the final output.
+      - name: Restore deb-builder image cache
+        id: cache-deb-builder
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/deb-builder.tar
+            .cache/deb-builder.state
+          key: deb-builder-${{ github.job }}-${{ hashFiles('deb-builder/Dockerfile', 'deb-builder/packages.list', 'deb-builder/pgp/nodesource.asc', 'deb-builder/lock/debian.sources', 'deb-builder/lock/debian-img-hash-lock.txt', 'deb-builder/lock/packages-version-lock.list', 'deb-builder/lock/packages-hash-lock.txt', 'deb-builder/scripts/**') }}
+
+      # actions/cache restores the ORIGINAL mtime from when the archive was
+      # saved (tar's default extraction behavior), not the extraction time —
+      # so a restored .tar can look OLDER than the Dockerfile/lock files
+      # actions/checkout just wrote with the current time, and Make's mtime
+      # check would rebuild anyway, silently discarding the cache hit.
+      - name: Mark deb-builder cache fresh
+        if: steps.cache-deb-builder.outputs.cache-hit == 'true'
+        run: touch .cache/deb-builder.tar .cache/deb-builder.state
+
+      - name: Restore os-builder image cache
+        id: cache-os-builder
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/os-builder.tar
+            .cache/os-builder.state
+          key: os-builder-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/build-toolchain-packages.list', 'os-builder/lock/build-toolchain-debian.sources', 'os-builder/lock/build-toolchain-debian-img-hash-lock.txt', 'os-builder/lock/build-toolchain-pkgs-version-lock.list', 'os-builder/lock/build-toolchain-pkgs-hash-lock.txt', 'os-builder/scripts/**') }}
+
+      - name: Mark os-builder cache fresh
+        if: steps.cache-os-builder.outputs.cache-hit == 'true'
+        run: touch .cache/os-builder.tar .cache/os-builder.state
+
+      # Keyed per job (build-1 vs build-2), not shared: each job independently
+      # bootstraps and caches its own copy, so the two builds still verify
+      # mmdebstrap's own determinism from scratch the first time a given lock
+      # state is built, while later commits touching the same lock state get
+      # a fast restore on both sides.
+      - name: Restore mmdebstrap rootfs cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/rootfs-*.tar
+            .cache/rootfs-*.tar.sha256
+          key: rootfs-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/lock/**', 'os-builder/build-toolchain-packages.list', 'os-builder/rootfs-packages.list', 'os-builder/build-os.sh') }}
+
       - name: Build disk image
         run: make build
         env:
           SOURCE_DATE_EPOCH: 0
 
       - name: Upload manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: manifest-build-1
           path: attestation/manifest.txt
@@ -72,7 +122,7 @@ jobs:
         run: echo "version=$(node -p "require('./app/package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Upload disk image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kiosk-v${{ steps.version.outputs.version }}.img.gz
           path: build/kiosk-v${{ steps.version.outputs.version }}.img.gz
@@ -85,7 +135,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Enable containerd-snapshotter
         run: |
@@ -109,13 +159,63 @@ jobs:
       - name: Install host dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      # Keyed per job, same as the rootfs cache below: these builder images
+      # are built with the same reproducibility discipline (SOURCE_DATE_EPOCH,
+      # rewrite-timestamp, pinned digests) as the final disk image, so keeping
+      # build-1 and build-2 independent here means this workflow also
+      # (re-)verifies that the builder images themselves build reproducibly,
+      # not just the final output.
+      - name: Restore deb-builder image cache
+        id: cache-deb-builder
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/deb-builder.tar
+            .cache/deb-builder.state
+          key: deb-builder-${{ github.job }}-${{ hashFiles('deb-builder/Dockerfile', 'deb-builder/packages.list', 'deb-builder/pgp/nodesource.asc', 'deb-builder/lock/debian.sources', 'deb-builder/lock/debian-img-hash-lock.txt', 'deb-builder/lock/packages-version-lock.list', 'deb-builder/lock/packages-hash-lock.txt', 'deb-builder/scripts/**') }}
+
+      # actions/cache restores the ORIGINAL mtime from when the archive was
+      # saved (tar's default extraction behavior), not the extraction time —
+      # so a restored .tar can look OLDER than the Dockerfile/lock files
+      # actions/checkout just wrote with the current time, and Make's mtime
+      # check would rebuild anyway, silently discarding the cache hit.
+      - name: Mark deb-builder cache fresh
+        if: steps.cache-deb-builder.outputs.cache-hit == 'true'
+        run: touch .cache/deb-builder.tar .cache/deb-builder.state
+
+      - name: Restore os-builder image cache
+        id: cache-os-builder
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/os-builder.tar
+            .cache/os-builder.state
+          key: os-builder-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/build-toolchain-packages.list', 'os-builder/lock/build-toolchain-debian.sources', 'os-builder/lock/build-toolchain-debian-img-hash-lock.txt', 'os-builder/lock/build-toolchain-pkgs-version-lock.list', 'os-builder/lock/build-toolchain-pkgs-hash-lock.txt', 'os-builder/scripts/**') }}
+
+      - name: Mark os-builder cache fresh
+        if: steps.cache-os-builder.outputs.cache-hit == 'true'
+        run: touch .cache/os-builder.tar .cache/os-builder.state
+
+      # Keyed per job (build-1 vs build-2), not shared: each job independently
+      # bootstraps and caches its own copy, so the two builds still verify
+      # mmdebstrap's own determinism from scratch the first time a given lock
+      # state is built, while later commits touching the same lock state get
+      # a fast restore on both sides.
+      - name: Restore mmdebstrap rootfs cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/rootfs-*.tar
+            .cache/rootfs-*.tar.sha256
+          key: rootfs-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/lock/**', 'os-builder/build-toolchain-packages.list', 'os-builder/rootfs-packages.list', 'os-builder/build-os.sh') }}
+
       - name: Build disk image
         run: make build
         env:
           SOURCE_DATE_EPOCH: 0
 
       - name: Upload manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: manifest-build-2
           path: attestation/manifest.txt
@@ -134,19 +234,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install host dependencies
         run: sudo apt-get update && sudo apt-get install -y gnupg jq
 
       - name: Download manifest from build 1
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: manifest-build-1
           path: /tmp/manifests/build-1
 
       - name: Download manifest from build 2
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: manifest-build-2
           path: /tmp/manifests/build-2
@@ -320,8 +420,13 @@ jobs:
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
 
+          # --target pins the release to this commit directly, so gh doesn't
+          # need to verify the local tag against the remote — that check can
+          # spuriously fail from GitHub API propagation lag right after the
+          # git push above, even though the tag push itself succeeded.
           gh release create "$TAG" \
             --title "$TAG" \
-            --generate-notes
+            --generate-notes \
+            --target "$GITHUB_SHA"
           gh release upload "$TAG" "/tmp/release/$ASSET_NAME" --clobber
           echo "Tagged $TAG and published release with $ASSET_NAME" >> "$GITHUB_STEP_SUMMARY"

@@ -47,7 +47,7 @@ grep -vE '^\s*(#|$)' "$VERSION_LOCK_LIST" | LC_ALL=C sort -u > "$locked"
 extra="$(LC_ALL=C comm -23 "$installed" "$locked")"
 missing="$(LC_ALL=C comm -13 "$installed" "$locked")"
 
-# the app package is installed from a local .deb, so it is never in the rootfs lock
+# The app package is installed from a local .deb, so it is never in the rootfs lock
 if [ -n "$ALLOW_EXTRA" ]; then
 	extra="$(printf '%s\n' "$extra" | grep -vxF "$ALLOW_EXTRA" || true)"
 fi
