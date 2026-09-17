@@ -42,3 +42,4 @@ zlib1g
 # --- firmware (modern hardware / laptops) ---
 
 firmware-linux-free
+firmware-linux-nonfree

@@ -68,7 +68,7 @@ jobs:
           path: |
             .cache/deb-builder.tar
             .cache/deb-builder.state
-          key: deb-builder-${{ github.job }}-${{ hashFiles('deb-builder/Dockerfile', 'deb-builder/packages.list', 'deb-builder/pgp/nodesource.asc', 'deb-builder/lock/debian.sources', 'deb-builder/lock/debian-img-hash-lock.txt', 'deb-builder/lock/packages-version-lock.list', 'deb-builder/lock/packages-hash-lock.txt', 'deb-builder/scripts/**') }}
+          key: &deb_builder_cache_key deb-builder-${{ github.job }}-${{ hashFiles('deb-builder/Dockerfile', 'deb-builder/packages.list', 'deb-builder/pgp/nodesource.asc', 'deb-builder/lock/debian.sources', 'deb-builder/lock/debian-img-hash-lock.txt', 'deb-builder/lock/packages-version-lock.list', 'deb-builder/lock/packages-hash-lock.txt', 'deb-builder/scripts/**') }}
 
       # actions/cache restores the ORIGINAL mtime from when the archive was
       # saved (tar's default extraction behavior), not the extraction time —
@@ -86,7 +86,7 @@ jobs:
           path: |
             .cache/os-builder.tar
             .cache/os-builder.state
-          key: os-builder-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/build-toolchain-packages.list', 'os-builder/lock/build-toolchain-debian.sources', 'os-builder/lock/build-toolchain-debian-img-hash-lock.txt', 'os-builder/lock/build-toolchain-pkgs-version-lock.list', 'os-builder/lock/build-toolchain-pkgs-hash-lock.txt', 'os-builder/scripts/**') }}
+          key: &os_builder_cache_key os-builder-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/build-toolchain-packages.list', 'os-builder/lock/build-toolchain-debian.sources', 'os-builder/lock/build-toolchain-debian-img-hash-lock.txt', 'os-builder/lock/build-toolchain-pkgs-version-lock.list', 'os-builder/lock/build-toolchain-pkgs-hash-lock.txt', 'os-builder/scripts/**') }}
 
       - name: Mark os-builder cache fresh
         if: steps.cache-os-builder.outputs.cache-hit == 'true'
@@ -103,7 +103,7 @@ jobs:
           path: |
             .cache/rootfs-*.tar
             .cache/rootfs-*.tar.sha256
-          key: rootfs-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/lock/**', 'os-builder/build-toolchain-packages.list', 'os-builder/rootfs-packages.list', 'os-builder/build-os.sh') }}
+          key: &rootfs_cache_key rootfs-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/lock/**', 'os-builder/build-toolchain-packages.list', 'os-builder/rootfs-packages.list', 'os-builder/build-os.sh') }}
 
       - name: Build disk image
         run: make build
@@ -172,7 +172,7 @@ jobs:
           path: |
             .cache/deb-builder.tar
             .cache/deb-builder.state
-          key: deb-builder-${{ github.job }}-${{ hashFiles('deb-builder/Dockerfile', 'deb-builder/packages.list', 'deb-builder/pgp/nodesource.asc', 'deb-builder/lock/debian.sources', 'deb-builder/lock/debian-img-hash-lock.txt', 'deb-builder/lock/packages-version-lock.list', 'deb-builder/lock/packages-hash-lock.txt', 'deb-builder/scripts/**') }}
+          key: *deb_builder_cache_key
 
       # actions/cache restores the ORIGINAL mtime from when the archive was
       # saved (tar's default extraction behavior), not the extraction time —
@@ -190,7 +190,7 @@ jobs:
           path: |
             .cache/os-builder.tar
             .cache/os-builder.state
-          key: os-builder-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/build-toolchain-packages.list', 'os-builder/lock/build-toolchain-debian.sources', 'os-builder/lock/build-toolchain-debian-img-hash-lock.txt', 'os-builder/lock/build-toolchain-pkgs-version-lock.list', 'os-builder/lock/build-toolchain-pkgs-hash-lock.txt', 'os-builder/scripts/**') }}
+          key: *os_builder_cache_key
 
       - name: Mark os-builder cache fresh
         if: steps.cache-os-builder.outputs.cache-hit == 'true'
@@ -207,7 +207,7 @@ jobs:
           path: |
             .cache/rootfs-*.tar
             .cache/rootfs-*.tar.sha256
-          key: rootfs-${{ github.job }}-${{ hashFiles('os-builder/Dockerfile', 'os-builder/lock/**', 'os-builder/build-toolchain-packages.list', 'os-builder/rootfs-packages.list', 'os-builder/build-os.sh') }}
+          key: *rootfs_cache_key
 
       - name: Build disk image
         run: make build
@@ -428,5 +428,16 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             --target "$GITHUB_SHA"
-          gh release upload "$TAG" "/tmp/release/$ASSET_NAME" --clobber
+          # uploads.github.com occasionally returns transient 5xx on large assets.
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" "/tmp/release/$ASSET_NAME" --clobber; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Failed to upload $ASSET_NAME after 5 attempts."
+              exit 1
+            fi
+            echo "Upload attempt $attempt failed, retrying in 30s..."
+            sleep 30
+          done
           echo "Tagged $TAG and published release with $ASSET_NAME" >> "$GITHUB_STEP_SUMMARY"

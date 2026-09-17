@@ -1,7 +1,7 @@
 {
   "name": "kiosk",
   "productName": "kiosk",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Minimal Electron hello-world app for the kiosk image",
   "main": ".webpack/main",
   "license": "UNLICENSED",

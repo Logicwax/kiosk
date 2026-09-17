@@ -32,28 +32,28 @@ cat > "$LOCK/rootfs-debian.sources" <<-EOF
 	Types: deb
 	URIs: http://deb.debian.org/debian
 	Suites: ${distro} ${distro}-updates
-	Components: main
+	Components: main non-free-firmware
 	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
 	Check-Valid-Until: no
 
 	Types: deb
 	URIs: ${snapshot_url}/${snapshot_date}
 	Suites: ${distro} ${distro}-updates
-	Components: main
+	Components: main non-free-firmware
 	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
 	Check-Valid-Until: no
 
 	Types: deb
 	URIs: http://deb.debian.org/debian-security
 	Suites: ${distro}-security
-	Components: main
+	Components: main non-free-firmware
 	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
 	Check-Valid-Until: no
 
 	Types: deb
 	URIs: ${snapshot_url}-security/${snapshot_date}
 	Suites: ${distro}-security
-	Components: main
+	Components: main non-free-firmware
 	Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
 	Check-Valid-Until: no
 EOF
