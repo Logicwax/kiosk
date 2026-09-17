@@ -120,6 +120,8 @@ distclean: clean
 # signatures, because they attest to bytes that no longer exist.
 # ---------------------------------------------------------------------------
 sign:
+	@echo "Please insert your yubikey and press enter when ready to sign"
+	@read
 	@./scripts/attest-sign
 
 verify:

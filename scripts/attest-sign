@@ -35,7 +35,6 @@ args=()
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-echo "==> If your key lives on a Yubikey, insert it now."
 gpg --yes --armor --detach-sign "${args[@]}" --output "$tmp" "$MANIFEST"
 
 # Ask the signature who signed it, rather than assuming.
