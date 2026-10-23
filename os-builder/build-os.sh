@@ -137,6 +137,11 @@ else
 		"$ROOTFS" \
 		"$REPO/os-builder/lock/rootfs-debian.sources"
 
+	# mmdebstrap installs the sources file as 0000<basename>; ship the
+	# conventional name instead.
+	mv "$ROOTFS/etc/apt/sources.list.d/0000rootfs-debian.sources" \
+		"$ROOTFS/etc/apt/sources.list.d/debian.sources"
+
 	# Written as a plain shell command after mmdebstrap has fully exited, not as
 	# one of its own hooks: a --customize-hook runs before mmdebstrap's own
 	# `unmount` phase, so /proc and /sys are still bind-mounted then — a

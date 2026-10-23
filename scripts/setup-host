@@ -53,6 +53,25 @@ need_sudo() {
 	SUDO="sudo"
 }
 
+# buildx is a docker CLI *plugin*, not a standalone binary, so `command -v docker`
+# passing is not enough to know builds will work. Distro-packaged docker commonly
+# ships without it: e.g. Ubuntu's own `docker.io` has no buildx at all until you
+# additionally install it, and the package providing it is confusingly NOT named
+# the same everywhere -- Docker's official apt repo calls it
+# `docker-buildx-plugin`, Ubuntu's own universe repo calls the identical plugin
+# `docker-buildx` (no suffix). Left undetected, this surfaces later (step 4) as
+# `docker buildx create --name ...` being misparsed as top-level `docker` flags
+# ("unknown flag: --name") -- a confusing error that doesn't mention buildx at
+# all, since without the plugin docker has no idea `buildx` was ever a
+# subcommand. Catch it here instead, where we can name the actual problem.
+buildx_present() { docker buildx version >/dev/null 2>&1; }
+buildx_apt_package() {
+	for pkg in docker-buildx-plugin docker-buildx; do
+		apt-cache policy "$pkg" 2>/dev/null | grep -q 'Candidate: [^(]' && { echo "$pkg"; return 0; }
+	done
+	return 1
+}
+
 # ---------------------------------------------------------------------------
 step "1/5  Host packages"
 # ---------------------------------------------------------------------------
@@ -63,8 +82,11 @@ done
 have_ovmf=0
 for f in "${OVMF_PATHS[@]}"; do [ -e "$f" ] && have_ovmf=1; done
 [ "$have_ovmf" -eq 1 ] || missing+=(ovmf)
+if command -v docker >/dev/null 2>&1 && ! buildx_present; then
+	missing+=("$(buildx_apt_package || echo docker-buildx-plugin)")
+fi
 if [ ${#missing[@]} -eq 0 ]; then
-	ok "all required tools present (docker, jq, git, mtools, qemu, ovmf)"
+	ok "all required tools present (docker, buildx, jq, git, mtools, qemu, ovmf)"
 else
 	todo "missing: ${missing[*]}"
 	if confirm "install them with apt-get?"; then
@@ -156,6 +178,17 @@ fi
 # ---------------------------------------------------------------------------
 step "4/5  Buildx builder ($BUILDER_NAME, $BUILDKIT_IMAGE)"
 # ---------------------------------------------------------------------------
+# Belt-and-suspenders re-check: step 1 may have declined/skipped the install
+# (non-interactive without FORCE=1, or the user said no), or docker itself was
+# just installed this same run so there was nothing to probe yet. Fail with a
+# clear, actionable message here rather than letting `docker buildx create`
+# blow up below with "unknown flag: --name" and no mention of buildx at all.
+if ! buildx_present; then
+	fail "docker buildx is not available — the plugin isn't installed"
+	pkg="$(buildx_apt_package || echo docker-buildx-plugin)"
+	echo "    Install it with: sudo apt-get install -y $pkg" >&2
+	exit 1
+fi
 current_driver="$(docker buildx inspect "$BUILDER_NAME" 2>/dev/null | awk '/^Driver:/{print $2}')" || true
 current_image="$(docker buildx inspect "$BUILDER_NAME" 2>/dev/null | grep -oE 'moby/buildkit:[^ ",]+' | head -1)" || true
 if [ "$current_driver" = "docker-container" ] && [ "$current_image" = "$BUILDKIT_IMAGE" ]; then
@@ -185,6 +218,7 @@ docker buildx use "$BUILDER_NAME" 2>/dev/null || true
 step "5/5  Verify"
 # ---------------------------------------------------------------------------
 rc=0
+buildx_present && ok "docker buildx plugin present" || { fail "docker buildx plugin missing"; rc=1; }
 driver="$(docker buildx inspect 2>/dev/null | awk '/^Driver:/{print $2}')"
 [ "$driver" = "docker-container" ] && ok "active buildx driver: $driver" || { fail "active buildx driver is '$driver'"; rc=1; }
 docker info >/dev/null 2>&1 && ok "docker daemon reachable" || { fail "cannot reach the docker daemon"; rc=1; }

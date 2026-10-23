@@ -53,7 +53,19 @@ see exactly what `make setup` changes:
 
     then `sudo systemctl restart docker`. Without it Docker uses the legacy
     graphdriver, which does not preserve image digests through `docker load`, so a
-    locally built builder image can differ from the same image elsewhere.
+    locally built builder image can differ from the same image elsewhere. Docker
+    Engine 28+ defaults to the containerd snapshotter already, so a modern host
+    may show this active with no "containerd-snapshotter" key in daemon.json at
+    all — check `docker info` for `driver-type: io.containerd.snapshotter.v1`
+    under `Storage Driver` before assuming you need to touch daemon.json.
+
+- The buildx CLI plugin — distro-packaged docker commonly doesn't include it.
+  The package name varies by source: Docker's official apt repo calls it
+  `docker-buildx-plugin`; Ubuntu's own repo calls the identical plugin
+  `docker-buildx` (no suffix). Check which one apt has:
+  `apt-cache policy docker-buildx-plugin docker-buildx`, then
+  `sudo apt install <whichever has a Candidate>`. Verify with
+  `docker buildx version`.
 
 - Buildx `docker-container` driver, with BuildKit pinned so the builder itself is
   not a moving part:
