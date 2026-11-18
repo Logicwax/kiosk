@@ -17,7 +17,9 @@ ENV SOURCE_DATE_EPOCH=1 \
 # Copy ONLY what the image build consumes. build-deb.sh runs from the /repo bind
 # mount at RUN time, so it deliberately is NOT copied — baking it in would
 # invalidate this layer on every edit and force a full toolchain reinstall.
-COPY packages.list /config/
+# packages.list itself is not copied either: packages-install installs from
+# packages-version-lock.list (the hash-verified set); packages.list is only
+# read at lock-generation time (packages-update, via a bind mount), never here.
 COPY pgp/nodesource.asc /config/pgp/
 COPY lock/debian.sources /config/lock/
 COPY lock/packages-version-lock.list /config/lock/
